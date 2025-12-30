@@ -1,0 +1,31 @@
+hydra:
+  run:
+    dir: '.'
+
+model_type: &mtype unet #unet #unet_int_mask
+
+defaults:
+  - model: *mtype
+
+checkpoints: "/home/student03/work/Artyom/checkpoints"
+work_dir: /home/student03/work/Artyom/work_dir
+out_dir: /home/student03/work/Artyom/out_dir
+data_path: /home/student03/work/Max/demo_perspective_dataset
+real_path: /home/student03/work/datasets/real-test/annotations.csv
+
+project_name: unet_int_mask
+experiment_name: 'unet_int_mask_000'
+
+seed: 2025
+n_workers: 0
+accelerator: 'gpu'
+device: 0
+log_nsteps: 20
+
+batch_size: 32
+n_epochs: 40
+
+dataset:
+  train_size: 0.8
+  image_width: 640
+  image_height: 640

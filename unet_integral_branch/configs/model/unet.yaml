@@ -1,0 +1,42 @@
+model_arch: Unet
+weights: /home/student03/work/Artem/pretrained/resnet18-5c106cde.pth
+num_classes: &ncls 1
+model_args:
+  encoder: resnet34
+  encoder_weights: "imagenet"
+  in_channels: 3
+  classes: *ncls
+
+losses:
+  - name: 'bce'
+    loss_fn: 'torch.nn.BCEWithLogitsLoss'
+    weight: 0.3
+    loss_kwargs: {}
+  - name: 'dice'
+    weight: 0.7
+    loss_fn: 'segmentation_models_pytorch.losses.DiceLoss'
+    loss_kwargs: { mode: 'binary', from_logits: true }
+
+metrics_kwargs:
+  num_classes: *ncls
+  task: binary
+  average: macro
+  threshold: 0.7
+
+optimizer: 'torch.optim.AdamW'
+optimizer_kwargs:
+  lr: 1e-3
+  weight_decay: 1e-4
+
+scheduler: 'torch.optim.lr_scheduler.ReduceLROnPlateau'
+scheduler_kwargs:
+  mode: max
+  factor: 0.1
+  patience: 5
+  threshold: 1e-4
+  threshold_mode: 'rel'
+
+checkpoint_callback:
+  monitor_mode: max
+  monitor_metric: val_iou
+  verbose: true

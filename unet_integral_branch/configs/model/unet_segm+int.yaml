@@ -1,0 +1,54 @@
+model_arch: src.modules.models.unet_integral.UnetIntegral
+weights: /home/student03/work/Artem/pretrained/resnet18-5c106cde.pth
+num_classes: &ncls 1
+model_args:
+  encoder: resnet34
+  encoder_weights: "imagenet"
+  in_channels: 3
+  mask_classes: *ncls
+  num_keypoints: 4
+  heatmap_temperature: 1.0
+
+# tells datamodule to also return keypoints targets (derived from mask corners)
+with_keypoints: true
+
+losses:
+  - name: 'mask_bce'
+    head: 'mask'
+    loss_fn: 'torch.nn.BCEWithLogitsLoss'
+    weight: 0.3
+    loss_kwargs: {}
+
+  - name: 'mask_dice'
+    head: 'mask'
+    weight: 0.7
+    loss_fn: 'segmentation_models_pytorch.losses.DiceLoss'
+    loss_kwargs: { mode: 'binary', from_logits: true }
+
+  - name: 'kps_mae'
+    head: 'keypoints'
+    loss_fn: 'torch.nn.L1Loss'
+    weight: 1.0
+    loss_kwargs: {}
+
+
+metrics_kwargs:
+  threshold: 0.7
+
+optimizer: 'torch.optim.AdamW'
+optimizer_kwargs:
+  lr: 5e-4
+  weight_decay: 1e-4
+
+scheduler: 'torch.optim.lr_scheduler.ReduceLROnPlateau'
+scheduler_kwargs:
+  mode: min
+  factor: 0.5
+  patience: 5
+  threshold: 1e-4
+  threshold_mode: 'rel'
+
+checkpoint_callback:
+  monitor_mode: min
+  monitor_metric: val_mae
+  verbose: true
