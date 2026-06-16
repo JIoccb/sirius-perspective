@@ -5,4 +5,4 @@ test:
 	PYTHONPATH=. python src/test.py
 
 tensorboard:
-	tensorboard --logdir /home/student03/work/Artem/work_dir/experiments/unet_int_mask/log_dir
+	tensorboard --logdir ./runs/experiments/unet_int_mask/log_dir

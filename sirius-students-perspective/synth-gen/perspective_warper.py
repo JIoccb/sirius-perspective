@@ -30,12 +30,15 @@ class PerspectiveWarper:
         self,
         page_np: np.ndarray,
         background_np: np.ndarray,
-        p_perspective: float = 0.5,
-        p_rot: float = 0.5,
-        p_curl: float = 0.5,
+        p_perspective: float | None = None,
+        p_rot: float | None = None,
+        p_curl: float | None = None,
         rng: np.random.Generator | None = None,
     ) -> Tuple[np.ndarray, List[List[float]], List[List[float]], int, int, np.ndarray]:
         rng = rng or np.random.default_rng()
+        p_perspective = self.config.p_perspective if p_perspective is None else p_perspective
+        p_rot = self.config.p_rot if p_rot is None else p_rot
+        p_curl = self.config.p_curl if p_curl is None else p_curl
 
         canvas_w = max(1, int(page_np.shape[1] * self.config.canvas_scale))
         canvas_h = max(1, int(page_np.shape[0] * self.config.canvas_scale))
