@@ -1,0 +1,17 @@
+[2026-06-16 12:36:32,889][root][INFO] - Raw ds shape: (30, 4)
+[2026-06-16 12:36:37,108][root][INFO] - DS shape after filter: (30, 4)
+[2026-06-16 12:36:37,116][root][INFO] - Train dataset: 24
+[2026-06-16 12:36:37,116][root][INFO] - Valid dataset: 3
+[2026-06-16 12:36:37,116][root][INFO] - Test dataset: 3
+[2026-06-16 12:36:37,122][root][INFO] - Datasets successfully saved!
+[2026-06-16 12:55:15,687][root][INFO] - Raw ds shape: (170, 4)
+[2026-06-16 12:55:28,881][root][INFO] - DS shape after filter: (170, 4)
+[2026-06-16 12:55:28,882][root][INFO] - Train dataset: 136
+[2026-06-16 12:55:28,882][root][INFO] - Valid dataset: 17
+[2026-06-16 12:55:28,883][root][INFO] - Test dataset: 17
+[2026-06-16 12:55:28,888][root][INFO] - Datasets successfully saved!
+[2026-06-16 12:55:31,207][httpx][INFO] - HTTP Request: GET https://huggingface.co/api/agent-harnesses "HTTP/1.1 200 OK"
+[2026-06-16 12:55:31,369][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/smp-hub/resnet34.imagenet/resolve/7a57b34f723329ff020b3f8bc41771163c519d0c/config.json "HTTP/1.1 307 Temporary Redirect"
+[2026-06-16 12:55:31,421][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/smp-hub/resnet34.imagenet/7a57b34f723329ff020b3f8bc41771163c519d0c/config.json "HTTP/1.1 200 OK"
+[2026-06-16 12:55:31,510][httpx][INFO] - HTTP Request: GET https://huggingface.co/api/resolve-cache/models/smp-hub/resnet34.imagenet/7a57b34f723329ff020b3f8bc41771163c519d0c/config.json "HTTP/1.1 200 OK"
+[2026-06-16 12:55:31,702][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/smp-hub/resnet34.imagenet/resolve/7a57b34f723329ff020b3f8bc41771163c519d0c/model.safetensors "HTTP/1.1 302 Found"

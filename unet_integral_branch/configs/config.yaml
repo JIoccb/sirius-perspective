@@ -2,19 +2,19 @@ hydra:
   run:
     dir: '.'
 
-model_type: &mtype unet #unet #unet_int_mask
+model_type: &mtype unet_segm+int
 
 defaults:
   - model: *mtype
 
-checkpoints: "/home/student03/work/Artyom/checkpoints"
-work_dir: /home/student03/work/Artyom/work_dir
-out_dir: /home/student03/work/Artyom/out_dir
-data_path: /home/student03/work/Max/demo_perspective_dataset
-real_path: /home/student03/work/datasets/real-test/annotations.csv
+checkpoints: ./checkpoints
+work_dir: ./runs
+out_dir: ./outputs
+data_path: ../synthetic_dataset
+real_path: ../raw_dataset/Test/Test/full_annotations.csv
 
 project_name: unet_int_mask
-experiment_name: 'unet_int_mask_000'
+experiment_name: unet_int_mask_local
 
 seed: 2025
 n_workers: 0
@@ -22,7 +22,7 @@ accelerator: 'gpu'
 device: 0
 log_nsteps: 20
 
-batch_size: 32
+batch_size: 8
 n_epochs: 40
 
 dataset:

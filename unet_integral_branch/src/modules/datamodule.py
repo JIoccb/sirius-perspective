@@ -1,6 +1,7 @@
 import logging
 import os
 import cv2
+import json
 from typing import Optional, Tuple, List
 from pathlib import Path
 from omegaconf import DictConfig
@@ -56,27 +57,33 @@ class SegmDataModule(LightningDataModule):
         """
 
         if stage == 'fit':
-            train_names, train_coords = read_df(self.data_path, 'train')
-            valid_names, valid_coords = read_df(self.data_path, 'valid')
+            train_names, train_masks, train_keypoints, train_valid = read_df(self.data_path, 'train')
+            valid_names, valid_masks, valid_keypoints, valid_valid = read_df(self.data_path, 'valid')
 
             self.train_dataset = SegmDataset(
                 train_names,
-                train_coords,
+                train_masks,
+                keypoints=train_keypoints,
+                keypoints_valid=train_valid,
                 transforms=self.train_transforms,
                 with_keypoints=self.with_keypoints,
             )
             self.valid_dataset = SegmDataset(
                 valid_names,
-                valid_coords,
+                valid_masks,
+                keypoints=valid_keypoints,
+                keypoints_valid=valid_valid,
                 transforms=self.val_transforms,
                 with_keypoints=self.with_keypoints,
             )
 
         elif stage == 'test':
-            test_names, test_coords = read_df(self.data_path, 'test')
+            test_names, test_masks, test_keypoints, test_valid = read_df(self.data_path, 'test')
             self.test_dataset = SegmDataset(
                 test_names,
-                test_coords,
+                test_masks,
+                keypoints=test_keypoints,
+                keypoints_valid=test_valid,
                 transforms=self.val_transforms,
                 with_keypoints=self.with_keypoints,
             )
@@ -86,7 +93,7 @@ class SegmDataModule(LightningDataModule):
             )
 
         elif stage == 'infer':
-            test_names = read_df(self.real_path)
+            test_names = read_infer_paths(self.real_path)
             self.predict_dataset = SegmDataset(
                 test_names,
                 transforms=self.val_transforms
@@ -144,11 +151,11 @@ def compare_mask_image(df):
     for i in range(df.shape[0]):
         mask_path = Path(df['masks'].iloc[i])
         image_path = Path(df['images'].iloc[i])
-        # print(mask_path.stem, image_path.stem)
         if mask_path.stem == image_path.stem:
-            msk = cv2.imread(mask_path)
-            img = cv2.imread(image_path)
-            # print(msk.shape, img.shape)
+            msk = cv2.imread(str(mask_path))
+            img = cv2.imread(str(image_path))
+            if msk is None or img is None:
+                continue
             if (msk.shape[0] == img.shape[0]) and (msk.shape[1] == img.shape[1]):
                 matches[i] = True
     return matches
@@ -158,19 +165,22 @@ def prepare_and_split_datasets(data_path: Path, train_fraction: float = 0.8, see
     """Load raw dataset and prepare train, valid, test splits
     """
 
-    # Load images list
-    images_list = list(Path(data_path / 'images').glob("*.jpg"))
-    masks_list = [Path(data_path / 'masks' / f"{path.stem}.png") for path in images_list]
-    df = pd.DataFrame(np.array([images_list, masks_list]).T, columns=['images', 'masks'])
-    # df = df.drop_duplicates()
+    data_path = Path(data_path)
+    annotations_path = data_path / 'annotations.csv'
+
+    if annotations_path.exists():
+        df = read_annotations_df(annotations_path)
+    else:
+        images_list = list(Path(data_path / 'images').glob("*.jpg"))
+        masks_list = [Path(data_path / 'masks' / f"{path.stem}.png") for path in images_list]
+        df = pd.DataFrame(np.array([images_list, masks_list]).T, columns=['images', 'masks'])
+
     logging.info(f'Raw ds shape: {df.shape}')
 
-    # Check image name equal mask name
     mask = compare_mask_image(df)
     df = df[mask]
     logging.info(f'DS shape after filter: {df.shape}')
 
-    # Train/valid/test split
     np.random.seed(seed)
     indicies = np.arange(df.shape[0])
     np.random.shuffle(indicies)
@@ -197,40 +207,101 @@ def prepare_and_split_datasets(data_path: Path, train_fraction: float = 0.8, see
     logging.info('Datasets successfully saved!')
 
 
-def read_df(data_path: Path, mode: str = None) -> Tuple[List, List]:
-    """
-    Read df with annotations to list of image paths and coords list
-    """
-    
-    if mode is not None:
-        df = pd.read_csv(data_path / f'df_{mode}.csv')
-        image_names = df['images'].to_list()
-        mask_names = df['masks'].to_list()
-
-        return image_names, mask_names
-    
-    else:
-        df = pd.read_csv(data_path)
-        if 'filepath' not in df.columns:
-            raise ValueError(f"Expected 'filepath' column in {data_path}")
-
-        csv_dir = Path(data_path).parent
-
-        def _resolve(p: str) -> str:
-            pth = Path(p)
-            if pth.is_absolute():
-                return str(pth)
-            # Most common: paths are relative to the CSV location
-            candidate = csv_dir / pth
-            if candidate.exists():
-                return str(candidate)
-            # Fallback: interpret as relative to the parent of the csv dir
-            candidate2 = csv_dir.parent / pth
-            return str(candidate2)
-
-        image_names = df['filepath'].apply(_resolve).to_list()
-        return image_names
+def _resolve_path(path_value: str, base_dir: Path) -> str:
+    pth = Path(path_value)
+    if pth.is_absolute():
+        return str(pth)
+    candidate = base_dir / pth
+    if candidate.exists():
+        return str(candidate)
+    return str(base_dir.parent / pth)
 
 
+def _parse_keypoints(value) -> List[List[float]]:
+    if isinstance(value, str):
+        value = json.loads(value)
+    arr = np.asarray(value, dtype=np.float32).reshape(4, 2)
+    return arr.tolist()
 
+
+def _parse_visibility(value) -> float:
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return 1.0
+    if isinstance(value, str):
+        value = json.loads(value)
+    arr = np.asarray(value, dtype=np.float32).reshape(-1)
+    return float(arr.min()) if arr.size else 1.0
+
+
+def read_annotations_df(annotations_path: Path) -> pd.DataFrame:
+    """Read generator annotations and normalize them to training columns."""
+    annotations_path = Path(annotations_path)
+    df = pd.read_csv(annotations_path)
+    if 'filepath' not in df.columns:
+        raise ValueError(f"Expected 'filepath' column in {annotations_path}")
+
+    csv_dir = annotations_path.parent
+    image_names = df['filepath'].apply(lambda value: _resolve_path(str(value), csv_dir))
+    mask_names = image_names.apply(lambda value: str(csv_dir / 'masks' / f'{Path(value).stem}.png'))
+
+    out = pd.DataFrame({'images': image_names, 'masks': mask_names})
+    if 'coords' in df.columns:
+        out['keypoints'] = df['coords'].apply(lambda value: json.dumps(_parse_keypoints(value)))
+    if 'visibility' in df.columns:
+        out['keypoints_valid'] = df['visibility'].apply(_parse_visibility)
+    elif 'coords' in df.columns:
+        out['keypoints_valid'] = 1.0
+    return out
+
+
+def read_df(data_path: Path, mode: str) -> Tuple[List, List, Optional[List], Optional[List]]:
+    """Read split dataframe to image, mask and optional keypoint lists."""
+    df_path = Path(data_path) / f'df_{mode}.csv'
+    if not df_path.exists():
+        raise FileNotFoundError(f"Dataset split does not exist: {df_path}")
+
+    df = pd.read_csv(df_path)
+    image_names = df['images'].to_list()
+    mask_names = df['masks'].to_list()
+    keypoints = None
+    keypoints_valid = None
+
+    if 'keypoints' in df.columns:
+        keypoints = df['keypoints'].apply(_parse_keypoints).to_list()
+        keypoints_valid = (
+            df['keypoints_valid'].astype(float).to_list()
+            if 'keypoints_valid' in df.columns
+            else [1.0] * len(keypoints)
+        )
+
+    return image_names, mask_names, keypoints, keypoints_valid
+
+
+def read_infer_paths(annotations_path: Path) -> List[str]:
+    """Read image paths for inference from an annotations CSV."""
+    annotations_path = Path(annotations_path)
+    df = pd.read_csv(annotations_path)
+    if 'filepath' not in df.columns:
+        raise ValueError(f"Expected 'filepath' column in {annotations_path}")
+    csv_dir = annotations_path.parent
+
+    image_names = []
+    for _, row in df.iterrows():
+        resolved = Path(_resolve_path(str(row['filepath']), csv_dir))
+        if resolved.exists():
+            image_names.append(str(resolved))
+            continue
+
+        if 'dataset' in row and 'filename' in row:
+            local_candidate = csv_dir / str(row['dataset']) / str(row['filename'])
+            if local_candidate.exists():
+                image_names.append(str(local_candidate))
+                continue
+            local_candidate = csv_dir / str(row['dataset']) / 'images' / str(row['filename'])
+            if local_candidate.exists():
+                image_names.append(str(local_candidate))
+                continue
+
+        image_names.append(str(resolved))
+    return image_names
 

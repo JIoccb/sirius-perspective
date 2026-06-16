@@ -12,6 +12,7 @@ class Loss:
     head: str
     weight: float
     loss: nn.Module
+    target_sigma: float = 2.0
 
 
 def get_losses(losses_cfg: DictConfig) -> tp.List[Loss]:
@@ -21,5 +22,6 @@ def get_losses(losses_cfg: DictConfig) -> tp.List[Loss]:
             head=getattr(loss_cfg, 'head', 'mask'),
             weight=loss_cfg.weight,
             loss=load_object(loss_cfg.loss_fn)(**loss_cfg.loss_kwargs),
+            target_sigma=float(getattr(loss_cfg, 'target_sigma', 2.0)),
         ) for loss_cfg in losses_cfg
     ]

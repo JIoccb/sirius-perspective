@@ -49,6 +49,20 @@ def _corners_from_mask(mask01: np.ndarray) -> Tuple[np.ndarray, float]:
     return box.astype(np.float32), 1.0
 
 
+def _normalized_to_pixel_keypoints(
+    keypoints_norm: Sequence[Sequence[float]],
+    width: int,
+    height: int,
+) -> np.ndarray:
+    """Convert normalized (x,y) keypoints to pixel coords for Albumentations."""
+    kps = np.asarray(keypoints_norm, dtype=np.float32).reshape(4, 2)
+    scale = np.array([width, height], dtype=np.float32)
+    kps_xy = kps * scale
+    kps_xy[:, 0] = np.clip(kps_xy[:, 0], 0, max(width - 1, 0))
+    kps_xy[:, 1] = np.clip(kps_xy[:, 1], 0, max(height - 1, 0))
+    return kps_xy
+
+
 class SegmDataset(Dataset):
     """Dataset for segmentation or segmentation+keypoints.
 
@@ -64,12 +78,16 @@ class SegmDataset(Dataset):
         self,
         images_names: List,
         masks_names: Optional[List] = None,
+        keypoints: Optional[List] = None,
+        keypoints_valid: Optional[List] = None,
         transforms=None,
         with_keypoints: bool = False,
     ):
         super().__init__()
         self.images_names = images_names
         self.masks_names = masks_names
+        self.keypoints = keypoints
+        self.keypoints_valid = keypoints_valid
         self.transforms = transforms
         self.with_keypoints = with_keypoints
 
@@ -88,7 +106,12 @@ class SegmDataset(Dataset):
             mask = (mask[..., None] / 255.0).astype(np.float32)
 
             if self.with_keypoints:
-                kps_xy, kps_valid = _corners_from_mask(mask)
+                if self.keypoints is not None:
+                    kps_xy = _normalized_to_pixel_keypoints(self.keypoints[idx], width, height)
+                    kps_valid = float(self.keypoints_valid[idx]) if self.keypoints_valid is not None else 1.0
+                else:
+                    kps_xy, kps_valid = _corners_from_mask(mask)
+
                 transformed = self.transforms(image=image, mask=mask, keypoints=kps_xy.tolist())
                 image_t = transformed['image'].float()
                 mask_t = transformed['mask'].float()
@@ -99,7 +122,14 @@ class SegmDataset(Dataset):
                 denom = np.array([max(w_inf - 1, 1), max(h_inf - 1, 1)], dtype=np.float32)
                 kps_norm = (kps_xy_t / denom).clip(0.0, 1.0)
 
-                return image_t, str(image_path), (height, width), mask_t, torch.from_numpy(kps_norm), torch.tensor(kps_valid, dtype=torch.float32)
+                return (
+                    image_t,
+                    str(image_path),
+                    (height, width),
+                    mask_t,
+                    torch.from_numpy(kps_norm),
+                    torch.tensor(kps_valid, dtype=torch.float32),
+                )
 
             transformed = self.transforms(image=image, mask=mask)
             image = transformed['image'].float()

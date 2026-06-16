@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -51,6 +52,7 @@ class UnetIntegral(nn.Module):
         in_channels: int = 3,
         mask_classes: int = 1,
         num_keypoints: int = 4,
+        keypoint_head_channels: int = 32,
         heatmap_temperature: float = 1.0,
         **unet_kwargs,
     ) -> None:
@@ -65,14 +67,26 @@ class UnetIntegral(nn.Module):
         )
 
         decoder_channels = unet_kwargs.get('decoder_channels', (256, 128, 64, 32, 16))
-        self.decoder = smp.decoders.unet.decoder.UnetDecoder(
-            encoder_channels=self.encoder.out_channels,
-            decoder_channels=decoder_channels,
-            n_blocks=unet_kwargs.get('encoder_depth', 5),
-            use_batchnorm=unet_kwargs.get('decoder_use_batchnorm', True),
-            center=unet_kwargs.get('center', False),
-            attention_type=unet_kwargs.get('attention_type', None),
-        )
+        decoder_depth = unet_kwargs.get('encoder_depth', 5)
+        use_batchnorm = unet_kwargs.get('decoder_use_batchnorm', True)
+        decoder_kwargs = {
+            'encoder_channels': self.encoder.out_channels,
+            'decoder_channels': decoder_channels,
+            'n_blocks': decoder_depth,
+            'attention_type': unet_kwargs.get('attention_type', None),
+        }
+        decoder_params = inspect.signature(smp.decoders.unet.decoder.UnetDecoder).parameters
+        if 'use_batchnorm' in decoder_params:
+            decoder_kwargs['use_batchnorm'] = use_batchnorm
+        if 'use_norm' in decoder_params:
+            decoder_kwargs['use_norm'] = 'batchnorm' if use_batchnorm else None
+        if 'center' in decoder_params:
+            decoder_kwargs['center'] = unet_kwargs.get('center', False)
+        if 'add_center_block' in decoder_params:
+            decoder_kwargs['add_center_block'] = unet_kwargs.get('center', False)
+        if 'interpolation_mode' in decoder_params:
+            decoder_kwargs['interpolation_mode'] = unet_kwargs.get('interpolation_mode', 'nearest')
+        self.decoder = smp.decoders.unet.decoder.UnetDecoder(**decoder_kwargs)
 
         last_ch = decoder_channels[-1]
         self.mask_head = smp.base.SegmentationHead(
@@ -82,7 +96,11 @@ class UnetIntegral(nn.Module):
             kernel_size=3,
         )
 
-        self.kp_head = nn.Conv2d(last_ch, num_keypoints, kernel_size=1)
+        self.kp_head = nn.Sequential(
+            nn.Conv2d(last_ch, keypoint_head_channels, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(keypoint_head_channels, num_keypoints, kernel_size=1),
+        )
         self.num_keypoints = int(num_keypoints)
         self.heatmap_temperature = float(heatmap_temperature)
 
@@ -91,13 +109,18 @@ class UnetIntegral(nn.Module):
     def initialize(self) -> None:
         smp.base.initialization.initialize_decoder(self.decoder)
         smp.base.initialization.initialize_head(self.mask_head)
-        nn.init.kaiming_normal_(self.kp_head.weight, nonlinearity='relu')
-        if self.kp_head.bias is not None:
-            nn.init.zeros_(self.kp_head.bias)
+        for module in self.kp_head.modules():
+            if isinstance(module, nn.Conv2d):
+                nn.init.kaiming_normal_(module.weight, nonlinearity='relu')
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
 
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         feats = self.encoder(x)
-        dec = self.decoder(*feats)
+        try:
+            dec = self.decoder(*feats)
+        except TypeError:
+            dec = self.decoder(feats)
 
         mask_logits = self.mask_head(dec)
         heatmap_logits = self.kp_head(dec)

@@ -1,5 +1,6 @@
 import asyncio
 import csv
+import io
 import json
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
@@ -181,7 +182,7 @@ class Factory:
         self,
         documents_dir: Path | str = Path("./documents_clean"),
         bg_dir: Path | str = Path("./COCO"),
-        output_dir: Path | str = Path("./demo_perspective_datasetv2"),
+        output_dir: Path | str = Path("./synthetic_dataset"),
         iterations_per_page: int = 1,
         canvas_scale: float = 1.2,
         doc_scale_range: Tuple[float, float] = (0.9, 1.1),
@@ -194,6 +195,9 @@ class Factory:
         batch_size: int = 8,
         doc_aug_probability: float = 0.7,
         use_fast_doc_aug: bool = True,
+        max_samples: Optional[int] = None,
+        seed: Optional[int] = None,
+        output_size: Optional[Tuple[int, int]] = None,
     ) -> None:
         self.documents_dir = Path(documents_dir)
         self.bg_dir = Path(bg_dir)
@@ -206,6 +210,9 @@ class Factory:
         self.batch_size = batch_size
         self.doc_aug_probability = doc_aug_probability
         self.use_fast_doc_aug = use_fast_doc_aug
+        self.max_samples = max_samples
+        self.seed = seed
+        self.output_size = output_size
 
         self.config = TaskConfig(
             canvas_scale=canvas_scale,
@@ -327,7 +334,9 @@ class Factory:
         bg_files = self._collect_backgrounds()
 
         total_tasks = len(documents) * self.iterations_per_page
-        rng = np.random.default_rng()
+        if self.max_samples is not None:
+            total_tasks = min(total_tasks, max(0, int(self.max_samples)))
+        rng = np.random.default_rng(self.seed)
         seeds = rng.integers(0, np.iinfo(np.uint32).max,
                              size=total_tasks, dtype=np.uint32)
 
@@ -339,6 +348,8 @@ class Factory:
 
         for document_path in documents:
             for _ in range(self.iterations_per_page):
+                if self.max_samples is not None and len(tasks) >= self.max_samples:
+                    return tasks
                 if bg_index < len(bg_files):
                     bg_path = bg_files[bg_index]
                     bg_index += 1
@@ -449,6 +460,20 @@ class Factory:
             canvas_w = result_data['canvas_w']
             canvas_h = result_data['canvas_h']
 
+            if self.output_size is not None:
+                out_w, out_h = self.output_size
+                composite_aug = cv2.resize(
+                    composite_aug,
+                    (out_w, out_h),
+                    interpolation=cv2.INTER_AREA,
+                )
+                warped_mask = cv2.resize(
+                    warped_mask,
+                    (out_w, out_h),
+                    interpolation=cv2.INTER_NEAREST,
+                )
+                canvas_w, canvas_h = out_w, out_h
+
             cv2.imwrite(
                 task.img_path,
                 composite_aug,
@@ -480,11 +505,11 @@ class Factory:
         """Записываем csv"""
         async with aiofiles.open(self.csv_path, "w", newline="", encoding="utf-8") as f:
 
-            await f.write("filename,filepath,width,height,coords,visibility,dataset\n")
-
-            for row in rows:
-                row_str = ",".join(str(item) for item in row) + "\n"
-                await f.write(row_str)
+            buffer = io.StringIO()
+            writer = csv.writer(buffer)
+            writer.writerow(["filename", "filepath", "width", "height", "coords", "visibility", "dataset"])
+            writer.writerows(rows)
+            await f.write(buffer.getvalue())
 
     async def generate(self) -> None:
         """Главный метод"""

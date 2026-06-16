@@ -1,5 +1,4 @@
 model_arch: src.modules.models.unet_integral.UnetIntegral
-weights: /home/student03/work/Artem/pretrained/resnet18-5c106cde.pth
 num_classes: &ncls 1
 model_args:
   encoder: resnet34
@@ -7,9 +6,10 @@ model_args:
   in_channels: 3
   mask_classes: *ncls
   num_keypoints: 4
+  keypoint_head_channels: 32
   heatmap_temperature: 1.0
 
-# tells datamodule to also return keypoints targets (derived from mask corners)
+# tells datamodule to also return keypoints targets from annotations.csv
 with_keypoints: true
 
 losses:
@@ -29,6 +29,13 @@ losses:
     head: 'keypoints'
     loss_fn: 'torch.nn.L1Loss'
     weight: 1.0
+    loss_kwargs: {}
+
+  - name: 'heatmap_mse'
+    head: 'heatmaps'
+    loss_fn: 'torch.nn.MSELoss'
+    weight: 0.2
+    target_sigma: 5.0
     loss_kwargs: {}
 
 

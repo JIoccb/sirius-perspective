@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 from omegaconf import DictConfig
 import segmentation_models_pytorch as smp
 import pytorch_lightning as pl
@@ -6,6 +7,48 @@ import pytorch_lightning as pl
 from src.modules.io import load_object
 from src.modules.losses import get_losses
 from src.modules.metrics import get_mask_metrics, get_kps_metrics
+
+
+def make_gaussian_heatmaps(
+    keypoints: torch.Tensor,
+    height: int,
+    width: int,
+    sigma: float,
+    valid: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Build normalized Gaussian heatmaps from keypoints in [0, 1]."""
+    if keypoints.ndim == 2:
+        keypoints = keypoints.view(keypoints.shape[0], -1, 2)
+
+    ys = torch.arange(height, device=keypoints.device, dtype=keypoints.dtype)
+    xs = torch.arange(width, device=keypoints.device, dtype=keypoints.dtype)
+    yy, xx = torch.meshgrid(ys, xs, indexing='ij')
+
+    px = keypoints[..., 0].clamp(0.0, 1.0) * max(width - 1, 1)
+    py = keypoints[..., 1].clamp(0.0, 1.0) * max(height - 1, 1)
+
+    dist2 = (xx[None, None] - px[..., None, None]) ** 2 + (yy[None, None] - py[..., None, None]) ** 2
+    heatmaps = torch.exp(-dist2 / (2.0 * sigma * sigma))
+    if valid is not None:
+        heatmaps = heatmaps * valid.view(-1, 1, 1, 1)
+    return heatmaps
+
+
+def keypoint_mae_px(
+    pred_keypoints: torch.Tensor,
+    gt_keypoints: torch.Tensor,
+    image_size: tuple[int, int],
+    valid: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Mean absolute keypoint error in pixels for tensors in [0, 1]."""
+    height, width = image_size
+    scale = pred_keypoints.new_tensor([width, height]).repeat(pred_keypoints.shape[1] // 2)
+    error = torch.abs(pred_keypoints - gt_keypoints) * scale
+    if valid is not None:
+        error = error * valid
+        denom = valid.sum().clamp_min(1.0) * pred_keypoints.shape[1]
+        return error.sum() / denom
+    return error.mean()
 
 
 class SegmModule(pl.LightningModule):
@@ -63,7 +106,7 @@ class SegmModule(pl.LightningModule):
 
         preds = self(images)
         loss = self.calculate_loss(preds, gt_mask, gt_kps, kps_valid, 'train_')
-        self.log('train_loss', loss.item(), on_step=True, on_epoch=True, prog_bar=True)
+        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -93,8 +136,15 @@ class SegmModule(pl.LightningModule):
                 pred_kps = pred_kps * kps_valid
                 gt_kps_flat = gt_kps_flat * kps_valid
             self.val_kps_metrics(pred_kps, gt_kps_flat)
+            self.log(
+                'val_mae_px',
+                keypoint_mae_px(pred_kps, gt_kps_flat, images.shape[-2:], kps_valid),
+                on_step=False,
+                on_epoch=True,
+                prog_bar=True,
+            )
 
-        self.log('val_loss', loss.item(), on_step=False, on_epoch=True, prog_bar=True)
+        self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True)
 
     def test_step(self, batch, batch_idx):
         images, images_names, im_size, *rest = batch
@@ -177,9 +227,23 @@ class SegmModule(pl.LightningModule):
                     pred_kps = pred_kps * kps_valid
                     gt_kps = gt_kps * kps_valid
                 loss = _loss.loss(pred_kps, gt_kps)
+            elif _loss.head == 'heatmaps':
+                if gt_keypoints is None:
+                    continue
+                if not (isinstance(preds, dict) and 'heatmaps' in preds):
+                    raise ValueError("Heatmap loss requested, but model did not return 'heatmaps'")
+                pred_heatmaps = preds['heatmaps']
+                target_heatmaps = make_gaussian_heatmaps(
+                    gt_keypoints,
+                    pred_heatmaps.shape[-2],
+                    pred_heatmaps.shape[-1],
+                    sigma=_loss.target_sigma,
+                    valid=kps_valid,
+                )
+                loss = _loss.loss(torch.sigmoid(pred_heatmaps), target_heatmaps)
             else:
                 raise ValueError(f"Unknown loss head: {_loss.head}")
             total_loss += _loss.weight * loss
-            self.log(f'{prefix}{_loss.name}_loss', loss.item())
-        self.log(f'{prefix}total_loss', total_loss.item())
+            self.log(f'{prefix}{_loss.name}_loss', loss.detach())
+        self.log(f'{prefix}total_loss', total_loss.detach())
         return total_loss
